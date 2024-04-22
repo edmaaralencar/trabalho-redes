@@ -1,7 +1,6 @@
 import socket
 import threading
-from utils import (PORT, IP, BUFFER_SIZE, compute_checksum, headers,
-                   get_message, get_checksum, unpack_data, get_sequence_number)
+from utils import (PORT, IP, BUFFER_SIZE, compute_checksum, headers, get_message, get_checksum, unpack_data, get_sequence_number)
 import traceback
 import time
 
@@ -25,25 +24,12 @@ class ChatServer:
 
         self.receive_messages()
 
-    def increment_sequence(self, index):
-        with self.sequence_lock:
-            current_sequence = self.sequence_numbers[index]
-            current_sequence += 1
-            self.sequence_numbers[index] = current_sequence
-
-    def increment_window(self):
-        with self.window_lock:
-            self.window_size += 1
-
-    def decrement_window(self):
-        with self.window_lock:
-            self.window_size -= 1
-
     def send_to_all(self, data):
         try:
             for connection in self.client_connections:
                 connection.send(data)
-            self.increment_window()
+            with self.window_lock:
+                self.window_size += 1
         except:
             print(traceback.print_exc())
 
@@ -51,14 +37,17 @@ class ChatServer:
         while True:
             try:
                 data = connection.recv(BUFFER_SIZE)
-                print({'data': data})
                 received_checksum = get_checksum(data)
                 message = get_message(data)
                 received_sequence = get_sequence_number(data)
-                self.decrement_window()
+                with self.window_lock:
+                    self.window_size -= 1
 
                 index = self.client_connections.index(connection)
-                self.increment_sequence(index)
+                with self.sequence_lock:
+                    current_sequence = self.sequence_numbers[index]
+                    current_sequence += 1
+                    self.sequence_numbers[index] = current_sequence
 
                 client_ack = self.sequence_numbers[index] + 1
 
@@ -67,6 +56,7 @@ class ChatServer:
                         force_error = False
                         unpacked_data = unpack_data(data)
                         unpacked_data['window_size'] = self.window_size
+                        # window_
                         unpacked_data['ack'] = client_ack
                         data = headers(unpacked_data)
                         self.nack_messages[message] = (connection, data)
@@ -85,7 +75,7 @@ class ChatServer:
                 self.remove_connection(connection)
                 break
 
-    def timer(self, connection, data, force_error):
+    def timer(self, _, data, force_error):
         time.sleep(self.message_timeout)
         if not self.ack_ok(data) or force_error:
             print("Timeout. Tentando novamente...")
