@@ -1,6 +1,6 @@
 import socket
 import threading
-from utils import (PORT, IP, BUFFER_SIZE, compute_checksum, headers, get_message, get_checksum, unpack_data, get_sequence_number)
+from utils import (PORT, IP, BUFFER_SIZE, calculate_checksum, headers, get_message, get_checksum, unpack_data, get_sequence_number)
 import traceback
 import time
 
@@ -37,8 +37,13 @@ class ChatServer:
         while True:
             try:
                 data = connection.recv(BUFFER_SIZE)
-                received_checksum = get_checksum(data)
                 message = get_message(data)
+                
+                if message == 'sair':
+                    self.remove_connection(connection)
+                    return
+
+                received_checksum = get_checksum(data)
                 received_sequence = get_sequence_number(data)
                 with self.window_lock:
                     self.window_size -= 1
@@ -51,12 +56,11 @@ class ChatServer:
 
                 client_ack = self.sequence_numbers[index] + 1
 
-                if received_checksum == compute_checksum(message):
+                if received_checksum == calculate_checksum(message):
                     if self.sequence_numbers[index] == received_sequence:
                         force_error = False
                         unpacked_data = unpack_data(data)
                         unpacked_data['window_size'] = self.window_size
-                        # window_
                         unpacked_data['ack'] = client_ack
                         data = headers(unpacked_data)
                         self.nack_messages[message] = (connection, data)
@@ -78,7 +82,7 @@ class ChatServer:
     def timer(self, _, data, force_error):
         time.sleep(self.message_timeout)
         if not self.ack_ok(data) or force_error:
-            print("Timeout. Tentando novamente...")
+            print("Ocorreu Timeout. Tentando novamente")
             self.send_to_all(data)
 
     def ack_ok(self, data):
@@ -97,15 +101,15 @@ class ChatServer:
             data = connection.recv(BUFFER_SIZE)
             received_checksum = get_checksum(data)
             nickname = get_message(data)
-            if received_checksum != compute_checksum(nickname):
+            if received_checksum != calculate_checksum(nickname):
                 print("Erro ao enviar o apelido.")
             else:
                 self.user_list.append(nickname)
                 self.client_connections.append(connection)
                 self.sequence_numbers.append(0)
                 print(f"{nickname} conectado ao servidor.")
-                connection.send(headers({"message": f"Bem-vindo {nickname}!", "window_size": self.window_size, "ack": 1}))
-                self.send_to_all(headers({"message": f"{nickname} entrou no chat!\n", "window_size": self.window_size, "ack": 1}))
+                connection.send(headers({"message": f"[ANÚNCIO] Bem vindo ao chat, {nickname}!", "window_size": self.window_size, "ack": 1}))
+                self.send_to_all(headers({"message": f"[ANÚNCIO] {nickname} entrou no chat!\n", "window_size": self.window_size, "ack": 1}))
                 thread = threading.Thread(target=self.handle_messages, args=(connection,))
                 thread.start()
 

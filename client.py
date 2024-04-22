@@ -35,6 +35,7 @@ class Client:
                     print(f"\n(Mensagem) {message}\n")
             except:
                 print("Ocorreu um erro!")
+                print(traceback.print_exc())
                 self.client.close()
                 break
 
@@ -56,18 +57,23 @@ class Client:
     def send_single_packet(self):
         if self.sequence_number - self.last_ack_received < self.window_size:
             input_message = input('Mensagem: ')
-            if input_message == 'Sair':
-                self.client.close()
-                self.isActive = False
+            if input_message.lower() == 'sair':
                 print("Conexão encerrada.")
+                with self.sequence_number_lock:
+                    self.sequence_number += 1
+
+                data = {"sequence_number": self.sequence_number, "message": "sair"}
+
+                self.client.send(headers(data))
+                # self.client.close()
+                # self.isActive = False
                 return
 
             message = f"{self.nickname}: {input_message}"
             with self.sequence_number_lock:
                 self.sequence_number += 1
             data = {"sequence_number": self.sequence_number, "message": message}
-            json = headers(data)
-            self.client.send(json)
+            self.client.send(headers(data))
 
     def send_batch(self):
         batch_size = int(input("Digite o tamanho do lote: "))
