@@ -1,61 +1,131 @@
 import socket
-import random
+import threading
+from utils import (PORT, IP, BUFFER_SIZE, compute_checksum, headers,
+                   get_message, get_checksum, unpack_data, get_sequence_number)
+import traceback
+import time
 
-def verify_checksum(data, checksum):
-    """Verifica se o checksum calculado dos dados recebidos corresponde ao checksum enviado."""
-    byte_count = len(data)
-    print(f"Número de bytes: {byte_count}")
+class ChatServer:
+    user_list = []
+    client_connections = []
+    sequence_numbers = []
     
-    # garante que os dados tenham um número par de bytes para o calculo do checksum
-    if byte_count % 2 == 1:
-        data += b'\x00'
-        byte_count += 1
+    def __init__(self):
+        self.server_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        self.server_socket.bind((IP, PORT))
+        self.server_socket.listen()
 
-    checksum_value = 0
+        self.acknowledgements = {}
+        self.message_timeout = 30
+        self.window_size = 5
+        self.nack_messages = {}
 
-    # calcula o checksum 
-    for i in range(0, byte_count, 2):
-        w = (data[i] << 8) + data[i + 1]
-        checksum_value += w
-        checksum_value = (checksum_value >> 16) + (checksum_value & 0xFFFF)
+        self.window_lock = threading.Lock()
+        self.sequence_lock = threading.Lock()
 
-    checksum_value = ~checksum_value & 0xFFFF
+        self.receive_messages()
 
-    # compara o checksum calculado com o enviado
-    return checksum_value == checksum
+    def increment_sequence(self, index):
+        with self.sequence_lock:
+            current_sequence = self.sequence_numbers[index]
+            current_sequence += 1
+            self.sequence_numbers[index] = current_sequence
 
-if __name__ == "__main__":
-    HOST = socket.gethostbyname(socket.gethostname())
-    PORT = 8080
-    server = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-    server.bind((HOST, PORT))
+    def increment_window(self):
+        with self.window_lock:
+            self.window_size += 1
 
-    print(f"Server listening on {HOST}:{PORT}")
+    def decrement_window(self):
+        with self.window_lock:
+            self.window_size -= 1
 
-    while True:
-        # recebe o checksum e os dados do cliente 
-        message, addr = server.recvfrom(2048)  # checksum e dados enviados juntos
-        if len(message) < 2:
-            continue  # evita processar mensagens que não tenham pelo menos 2 bytes para o checksum
+    def send_to_all(self, data):
+        try:
+            for connection in self.client_connections:
+                connection.send(data)
+            self.increment_window()
+        except:
+            print(traceback.print_exc())
 
-        # separa o checksum dos dados
-        checksum_bytes = message[:2]
-        data = message[2:].decode('utf-8')
+    def handle_messages(self, connection):
+        while True:
+            try:
+                data = connection.recv(BUFFER_SIZE)
+                print({'data': data})
+                received_checksum = get_checksum(data)
+                message = get_message(data)
+                received_sequence = get_sequence_number(data)
+                self.decrement_window()
 
-        print("Cliente: Usuário")
+                index = self.client_connections.index(connection)
+                self.increment_sequence(index)
 
-        checksum = int.from_bytes(checksum_bytes, byteorder="big")
+                client_ack = self.sequence_numbers[index] + 1
 
-        # simula a possibilidade de erro de integridade nos dados
-        integrity_error = random.randint(0, 100)
-        if integrity_error <= 25:
-            print("Pacote contém erro de integridade.")
-            server.sendto(b"ERRO", addr)
-        else:
-            if verify_checksum(data.encode("utf-8"), checksum):
-                print("Checksum é válido.")
-                data = data.upper()
-                server.sendto(data.encode("utf-8"), addr)
+                if received_checksum == compute_checksum(message):
+                    if self.sequence_numbers[index] == received_sequence:
+                        force_error = False
+                        unpacked_data = unpack_data(data)
+                        unpacked_data['window_size'] = self.window_size
+                        unpacked_data['ack'] = client_ack
+                        data = headers(unpacked_data)
+                        self.nack_messages[message] = (connection, data)
+                        if "TIMEOUTERROR" in message:
+                            force_error = True
+                        acknowledgment_timer = threading.Thread(target=self.timer, args=(connection, data, force_error))
+                        acknowledgment_timer.start()
+                        self.send_to_all(data)
+                    else:
+                        print("Número de sequência incorreto.")
+                else:
+                    print("Soma de verificação inválida.")
+            except:
+                print("Ocorreu um erro:")
+                print(traceback.print_exc())
+                self.remove_connection(connection)
+                break
+
+    def timer(self, connection, data, force_error):
+        time.sleep(self.message_timeout)
+        if not self.ack_ok(data) or force_error:
+            print("Timeout. Tentando novamente...")
+            self.send_to_all(data)
+
+    def ack_ok(self, data):
+        message = get_message(data)
+        if message in self.nack_messages:
+            del self.nack_messages[message]
+            return True
+        return False
+
+    def receive_messages(self):
+        while True:
+            connection, address = self.server_socket.accept()
+            print("Conexão estabelecida com {}".format(str(address)))
+
+            connection.send(headers({"message": "NICK", "window_size": self.window_size, "ack": 1}))
+            data = connection.recv(BUFFER_SIZE)
+            received_checksum = get_checksum(data)
+            nickname = get_message(data)
+            if received_checksum != compute_checksum(nickname):
+                print("Erro ao enviar o apelido.")
             else:
-                print("Checksum é inválido.")
-                server.sendto(b"ERRO", addr)
+                self.user_list.append(nickname)
+                self.client_connections.append(connection)
+                self.sequence_numbers.append(0)
+                print(f"{nickname} conectado ao servidor.")
+                connection.send(headers({"message": f"Bem-vindo {nickname}!", "window_size": self.window_size, "ack": 1}))
+                self.send_to_all(headers({"message": f"{nickname} entrou no chat!\n", "window_size": self.window_size, "ack": 1}))
+                thread = threading.Thread(target=self.handle_messages, args=(connection,))
+                thread.start()
+
+    def remove_connection(self, connection):
+        index = self.client_connections.index(connection)
+        self.client_connections.remove(connection)
+        connection.close()
+        nickname = self.user_list[index]
+        self.send_to_all(headers({"message": f"{nickname} saiu.", "window_size": self.window_size, "ack": 100}))
+        self.user_list.remove(nickname)
+
+if __name__ == '__main__':
+    server = ChatServer()

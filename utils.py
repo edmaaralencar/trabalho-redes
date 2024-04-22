@@ -1,9 +1,8 @@
-import socket
-import json
-
-PORT = 8900
-IP = socket.gethostname()
+PORT = 1233
+IP = '127.0.0.1'
 BUFFER_SIZE = 1024
+
+import json
 
 def compute_checksum(data):
     checksum = 0
@@ -15,7 +14,7 @@ def compute_checksum(data):
         checksum ^= ord(char)
     return checksum
 
-def  headers(data):
+def headers(data):
     data['checksum'] = compute_checksum(data['message'])
     json_data = json.dumps(data).encode('ascii')
     return json_data
@@ -39,3 +38,13 @@ def get_sequence_number(data):
     data_json = unpack_data(data)
     sequence_number = data_json['sequence_number']
     return int(sequence_number)
+
+def get_window_size(data):
+    data_json = unpack_data(data)
+    window_size = data_json['window_size']
+    return int(window_size)
+
+def get_ack(data):
+    data_json = unpack_data(data)
+    ack = data_json['ack']
+    return int(ack)
