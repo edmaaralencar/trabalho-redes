@@ -57,6 +57,7 @@ class ChatServer:
                 client_ack = self.sequence_numbers[index] + 1
 
                 if received_checksum == calculate_checksum(message):
+                    print("Checksum calculado:", received_checksum)
                     if self.sequence_numbers[index] == received_sequence:
                         force_error = False
                         unpacked_data = unpack_data(data)

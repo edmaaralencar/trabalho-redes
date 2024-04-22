@@ -42,7 +42,7 @@ class Client:
     def write(self):
         while self.isActive:
             try:
-                mode = input("Digite '1' para enviar um pacote isolado ou '2' para enviar um lote: ").strip()
+                mode = input("Digite [1] para enviar um pacote isolado ou [2] para enviar um lote: ").strip()
                 if mode == '1':
                     self.send_single_packet()
                 elif mode == '2':
@@ -65,8 +65,8 @@ class Client:
                 data = {"sequence_number": self.sequence_number, "message": "sair"}
 
                 self.client.send(headers(data))
-                # self.client.close()
-                # self.isActive = False
+                self.client.close()
+                self.isActive = False
                 return
 
             message = f"{self.nickname}: {input_message}"
