@@ -1,77 +1,80 @@
-import socket
-import threading
-from utils import IP, PORT, get_message, headers
-from datetime import datetime
-import traceback
+import socket as s
 
-class Client:
-  def __init__(self):
-    self.running = True
-    self.nickname = input("Escolha seu nome: ")
-    self.client = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-    self.client.connect((IP, PORT))
+def checksum(data):
+    # calcula o checksum dos dados enviados
+    byte_count = len(data)
+    if byte_count % 2 == 1:
+        data += b'\x00'
+    checksum_value = 0
+    # itera sobre os dados em pares de bytes
+    for i in range(0, len(data), 2):
+        # combina dois bytes em uma palavra de 16 bits e adiciona ao valor do checksum
+        w = (data[i] << 8) + data[i + 1]
+        checksum_value += w
+        # se houver overflow, adiciona a parte excedente ao valor do checksum
+        checksum_value = (checksum_value >> 16) + (checksum_value & 0xFFFF)
+    # complementa o valor do checksum e o trunca para 16 bits
+    checksum_value = ~checksum_value & 0xFFFF
+    return checksum_value
 
-    self.sequence_number = 0
-    self.sequence_number_lock = threading.Lock()
-    self.window_size = 5
-    self.last_ack_received = 0
+if __name__ == "__main__":
+    # obtem o endereço IP do host local e define a porta
+    HOST = s.gethostbyname(s.gethostname())
+    PORT = 8080
+    # cria um socket UDP
+    client = s.socket(s.AF_INET, s.SOCK_DGRAM)
+    addr = (HOST, PORT)
 
-    receive_thread = threading.Thread(target=self.receive)
-    receive_thread.start()
+    while True:
+        # solicitação de nome ao usuario 
+        data = input("Escolha seu nome: ")
+        if not data:
+            break
+        # codifica a palavra
+        data = data.encode("utf-8")
 
-    write_thread = threading.Thread(target=self.write)
-    write_thread.start()
+        # solicitação do modo de envio 
+        send_mode = input("Digite [1] para modo de envio isolado e [2] para modo de envio em lote: ")
 
-  def receive(self): 
-    while self.running:
-      try:
-        data = self.client.recv(1024)
-        message = get_message(data)
+        if send_mode == "1":
+            # calcula o checksum da palavra e o converte em bytes
+            checksum_value = checksum(data)
+            checksum_bytes = checksum_value.to_bytes(2, byteorder="big")
+            # cria o pacote adicionando o checksum aos dados
+            packet = checksum_bytes + data
+            # envia o pacote para o endereço especificado
+            client.sendto(packet, addr)
+        elif send_mode == "2":
+            # cria uma lista para armazenar os pacotes
+            packets = []
+            while True:
+                # solicita ao usuário uma nova palavra ou finaliza
+                additional_data = input("Digite uma palavra. Caso queira finalizar, deixe a linha vazia: ")
+                if not additional_data:
+                    break
+                # codifica a palavra adicional 
+                additional_data = additional_data.encode("utf-8")
+                # calcula o checksum da palavra adicional e o converte em bytes
+                checksum_value = checksum(additional_data)
+                checksum_bytes = checksum_value.to_bytes(2, byteorder="big")
+                # adiciona o checksum aos dados e armazena o pacote na lista
+                packets.append(checksum_bytes + additional_data)
 
-        if message == 'name':
-           self.client.send(headers({ "message": self.nickname }))
+            for packet in packets:
+                # envia cada pacote para o seu endereço 
+                client.sendto(packet, addr)
+                # espera por uma resposta do servidor
+                response, _ = client.recvfrom(1024)
+                response = response.decode("utf-8")
+                # verifica se a resposta apresenta erro
+                if response == "ERRO":
+                    print("Falha de integridade detectada.")
+                else:
+                    # exibe o comprimento da resposta
+                    print(f"Comprimento da resposta: {len(response)}")
         else:
-          print(f"{datetime.now().strftime('%H:%M')} {message}\n")
-      except:
-        print(traceback.print_exc())
-        self.client.close()
-        break
-  
-  def write(self):
-    while self.running:
-      try:
-        if self.sequence_number - self.last_ack_received < self.window_size:
-          message = '{}: {}'.format(self.nickname, input('> '))
+            # mensagem de erro 
+            print("Modo de envio não reconhecido.")
 
-          self.increment_sequence_number()
-          
-          data = {"sequence_number": self.sequence_number, "message": message}
-          json_data = headers(data)
-          
-          self.client.send(json_data)
-      except:
-        print("Ocorreu um erro!")
-        print(traceback.print_exc())
-
-def client_program():
-    host = socket.gethostname()  # as both code is running on same pc
-    port = 8000  # socket server port number
-
-    client_socket = socket.socket()  # instantiate
-    client_socket.connect((host, port))  # connect to the server
-
-    message = input(" -> ")  # take input
-
-    while message.lower().strip() != 'bye':
-        client_socket.send(message.encode())  # send message
-        data = client_socket.recv(1024).decode()  # receive response
-
-        print('Received from server: ' + data)  # show in terminal
-
-        message = input(" -> ")  # again take input
-
-    client_socket.close()  # close the connection
-
-
-if __name__ == '__main__':
-    client = Client()
+    # fecha o socket do cliente 
+    client.close()

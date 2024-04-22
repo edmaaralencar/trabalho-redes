@@ -1,84 +1,61 @@
 import socket
-from utils import IP, PORT, headers, get_message, get_checksum, compute_checksum
-import traceback
-import threading
+import random
 
-class Server:
-  nicknames = []
-  clients = []
-  sequence_numbers = []
+def verify_checksum(data, checksum):
+    """Verifica se o checksum calculado dos dados recebidos corresponde ao checksum enviado."""
+    byte_count = len(data)
+    print(f"Número de bytes: {byte_count}")
+    
+    # garante que os dados tenham um número par de bytes para o calculo do checksum
+    if byte_count % 2 == 1:
+        data += b'\x00'
+        byte_count += 1
 
-  def __init__(self):
-    self.server = socket.socket()
-    self.server.bind((IP, PORT))
-    self.server.listen()
+    checksum_value = 0
 
-    self.acknowledgements = {}
-    self.window_size = 5
+    # calcula o checksum 
+    for i in range(0, byte_count, 2):
+        w = (data[i] << 8) + data[i + 1]
+        checksum_value += w
+        checksum_value = (checksum_value >> 16) + (checksum_value & 0xFFFF)
 
-    self.window_size_lock = threading.Lock()
-    self.sequence_number_lock = threading.Lock()
+    checksum_value = ~checksum_value & 0xFFFF
 
-    self.receive()
+    # compara o checksum calculado com o enviado
+    return checksum_value == checksum
 
-  def increment_window_size(self):
-    with self.window_size_lock:
-        self.window_size += 1
+if __name__ == "__main__":
+    HOST = socket.gethostbyname(socket.gethostname())
+    PORT = 8080
+    server = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+    server.bind((HOST, PORT))
 
-  def broadcast(self, data):
-    try:
-      for client in self.clients:
-          client.send(data)
-      self.increment_window_size()
-    except:
-      print(traceback.print_exc())
+    print(f"Server listening on {HOST}:{PORT}")
 
-  def receive(self):
-     while True:
-        conn, address = self.server.accept()
-        print("Conectado com {}".format(str(address)))
+    while True:
+        # recebe o checksum e os dados do cliente 
+        message, addr = server.recvfrom(2048)  # checksum e dados enviados juntos
+        if len(message) < 2:
+            continue  # evita processar mensagens que não tenham pelo menos 2 bytes para o checksum
 
-        conn.send(headers({"message": "name", "window_size": self.window_size, "ack": 1}))
-        data = conn.recv(1024)
+        # separa o checksum dos dados
+        checksum_bytes = message[:2]
+        data = message[2:].decode('utf-8')
 
-        received_checksum = get_checksum(data)
-        user = get_message(data)
+        print("Cliente: Usuário")
 
-        if received_checksum != compute_checksum(user):
-          print("Ocorreu um erro no envio do apelido.")
+        checksum = int.from_bytes(checksum_bytes, byteorder="big")
+
+        # simula a possibilidade de erro de integridade nos dados
+        integrity_error = random.randint(0, 100)
+        if integrity_error <= 25:
+            print("Pacote contém erro de integridade.")
+            server.sendto(b"ERRO", addr)
         else:
-          self.nicknames.append(user)
-          self.clients.append(conn)
-          self.sequence_numbers.append(0)
-
-          print(f"{user} conectou.")
-
-          conn.send(headers({"message": f"Bem-vindo {user}!", "window_size": self.window_size, "ack": 1}))
-          print(self.window_size)
-          self.broadcast(headers({"message": f"{user} entrou no chat!\n", "window_size": self.window_size, "ack": 1}))
-
-# def server_program():
-#     host = socket.gethostname()
-#     port = 8000  # initiate port no above 1024
-
-#     server_socket = socket.socket()  # get instance
-#     server_socket.bind((host, port))  # bind host address and port together
-
-#     # configure how many client the server can listen simultaneously
-#     server_socket.listen(2)
-#     conn, address = server_socket.accept()  # accept new connection
-#     print("Connection from: " + str(address))
-#     while True:
-#         # receive data stream. it won't accept data packet greater than 1024 bytes
-#         data = conn.recv(1024).decode()
-#         if not data:
-#             # if data is not received break
-#             break
-#         print("from connected user: " + str(data))
-#         data = input(' -> ')
-#         conn.send(data.encode())  # send data to the client
-
-#     conn.close()  # close the connection
-
-if __name__ == '__main__':
-    server = Server()
+            if verify_checksum(data.encode("utf-8"), checksum):
+                print("Checksum é válido.")
+                data = data.upper()
+                server.sendto(data.encode("utf-8"), addr)
+            else:
+                print("Checksum é inválido.")
+                server.sendto(b"ERRO", addr)
